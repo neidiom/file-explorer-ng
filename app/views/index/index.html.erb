@@ -1,7 +1,11 @@
-<%= form_tag({}, multipart: true) do %>
-  <%= file_field_tag 'file' %>
+<%= form_tag(action: @directory_info.root? ? :upload_index : :upload, multipart: true) do %>
+  <%= hidden_field_tag 'path', @directory_info.requested_path unless @directory_info.root? %>
+  <%= file_field_tag 'file',
+      accept: 'text/*,application/javascript,text/css,text/plain',
+      class: 'file-input' %>
   <input class="download" type="submit" value="Upload" />
 <% end %>
+
 <table>
   <thead>
     <tr>
@@ -13,35 +17,8 @@
     </tr>
   </thead>
   <tbody>
-    <% @directory.each do |entry| %>
-    <tr>
-      <td class="name">
-        <%= link_to "/#{entry[:relative]}", class: entry[:type].to_s do %>
-          <%= fa_icon (entry[:type] == :file ? 'file' : 'folder') %>
-          <span class="filename"><%= entry[:entry] %></span>
-        <% end %>
-      </td>
-      <td>
-        <%= entry[:size] %>
-      </td>
-      <td class="date">
-        <%= entry[:date] %>
-      </td>
-      <td>
-        <% if entry[:entry] != './' && entry[:entry] != '../' %>
-          <%= link_to '#', class: 'delete', onclick: "rename('#{entry[:relative]}')" do %>
-            <%= fa_icon 'i-cursor' %> Rename
-          <% end %>
-        <% end %>
-      </td>
-      <td>
-        <% if entry[:entry] != './' && entry[:entry] != '../' %>
-          <%= link_to "/#{entry[:relative]}", method: :delete, class: 'delete', data: { confirm: "Are you sure you want to delete `#{entry[:absolute]}`?" } do %>
-            <%= fa_icon 'trash' %> Delete
-          <% end %>
-        <% end %>
-      </td>
-    </tr>
+    <% @directory_info.entries.each do |entry| %>
+      <%= render partial: 'directory_entry', locals: { entry: entry } %>
     <% end %>
   </tbody>
 </table>

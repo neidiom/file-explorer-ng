@@ -1,4 +1,4 @@
-FROM ruby:2.6.3-alpine3.9
+FROM ruby:4.0-alpine
 
 ENV RAILS_ENV=production
 RUN apk add --no-cache git ruby-dev build-base libxml2-dev libxslt-dev libffi-dev tzdata nodejs

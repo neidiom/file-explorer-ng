@@ -1,122 +1,119 @@
-class IndexController < ApplicationController
-  BASE_DIRECTORY = ENV['BASE_DIRECTORY'] || '.'
+# frozen_string_literal: true
 
-  include ActionView::Helpers::NumberHelper
+require 'pathname'
+
+# Controller for managing file browsing and operations
+class IndexController < ApplicationController
+  include FileSystemSecurity
+
+  BASE_DIRECTORY = Pathname.new(ENV.fetch('BASE_DIRECTORY', '.'))
+  MAX_INLINE_DISPLAY_SIZE = 1.megabyte
 
   before_action :set_base_url
+  before_action :validate_base_directory
 
+  # GET /
+  # Display root directory listing
   def index
-    check_path_exist('')
-    populate_directory(BASE_DIRECTORY, '')
-  end
-
-  def upload_index
-    upload_file('')
-    populate_directory(BASE_DIRECTORY, '')
+    @directory_info = DirectoryInfo.new(
+      BASE_DIRECTORY,
+      request_path: '',
+      base_url: @base_url
+    )
     render :index
   end
 
-  def path
-    absolute_path = check_path_exist(params[:path])
+  # POST /
+  # Upload file to root directory
+  def upload_index
+    upload_file_to(BASE_DIRECTORY)
+    redirect_to action: :index
+  end
 
-    if File.directory?(absolute_path)
-      populate_directory(absolute_path, "#{params[:path]}/")
+  # GET /:path
+  # Display directory content or file content based on path
+  def show
+    path = validate_and_resolve_path(params[:path])
+
+    if path.directory?
+      @directory_info = DirectoryInfo.new(
+        path,
+        request_path: params[:path],
+        base_url: @base_url
+      )
       render :index
-    elsif File.file?(absolute_path)
-      if File.size(absolute_path) > 1_000_000 || params[:download]
-        send_file absolute_path
-      else
-        @file = File.read(absolute_path)
-        render :file, formats: :html
-      end
+    else
+      display_file(path, params[:download])
     end
   end
 
+  # POST /:path
+  # Upload file to specified directory
   def upload
-    upload_file(params[:path])
-    path
+    path = validate_and_resolve_path(params[:path])
+    raise ForbiddenError unless path.directory?
+
+    upload_file_to(path)
+    redirect_to action: :show, path: params[:path]
   end
 
-  def delete
-    absolute_path = check_path_exist(params[:path])
+  # DELETE /:path
+  # Delete file or directory at specified path
+  def destroy
+    path = validate_and_resolve_path(params[:path])
+    FileDeletionService.delete(path)
 
-    if File.directory?(absolute_path)
-      FileUtils.rm_rf(absolute_path)
-    else
-      FileUtils.rm(absolute_path)
-    end
-    head 204
+    head :no_content
   end
 
-  def rename
-    absolute_path = check_path_exist(params[:path])
-    new_path = safe_expand_path(params[:new_name])
-    if File.exists?(new_path)
-      head 403
-    else
-      parent = new_path.split('/')[0..-2].join('/')
-      FileUtils.mkdir_p(parent)
-      FileUtils.mv(absolute_path, new_path)
+  # PUT /:path
+  # Rename/move file or directory
+  def update
+    source = validate_and_resolve_path(params[:path])
+    destination = validate_and_resolve_path(params[:new_name])
 
-      head 204
+    if destination.exist?
+      head :conflict
+    else
+      FileOperationService.rename(from: source, to: destination)
+      head :no_content
     end
   end
 
   private
 
-  def my_escape(string)
-    string.gsub(/([^ a-zA-Z0-9_.-]+)/) do
-      '%' + $1.unpack('H2' * $1.bytesize).join('%').upcase
+  # Display file content or trigger download
+  def display_file(path, force_download)
+    if force_download || path.size > MAX_INLINE_DISPLAY_SIZE
+      send_file(path.to_s, disposition: :attachment)
+    else
+      @file_content = path.read
+      render :file, formats: :html
     end
   end
 
-  def populate_directory(current_directory, current_url)
-    directory = Dir.entries(current_directory)
-    @directory = directory.map do |file|
-      real_path_absolute = "#{current_directory}/#{file}"
-      stat = File.stat(real_path_absolute)
-      is_file = stat.file?
+  # Upload a file to a directory
+  def upload_file_to(directory)
+    raise ForbiddenError unless directory.directory?
 
-      {
-        size: (is_file ? (number_to_human_size stat.size rescue '-'): '-'),
-        type: (is_file ? :file : :directory),
-        date: (stat.mtime.strftime('%d %b %Y %H:%M') rescue '-'),
-        relative: my_escape("#{current_url}#{file}").gsub('%2F', '/'),
-        entry: "#{file}#{is_file ? '': '/'}",
-        absolute: real_path_absolute
-      }
-    end.sort_by { |entry| "#{entry[:type]}#{entry[:relative]}" }
+    file = params[:file]
+    return if file.nil?
+
+    target_path = directory + file.original_filename
+    validate_operation_allowed(target_path)
+
+    FileUploadService.upload(directory: directory, file: file)
   end
 
-  def safe_expand_path(path)
-    current_directory = File.expand_path(BASE_DIRECTORY)
-    tested_path = File.expand_path(path, BASE_DIRECTORY)
-
-    unless tested_path.starts_with?(current_directory)
-      raise ArgumentError, 'Should not be parent of root'
-    end
-    tested_path
-  end
-
-  def upload_file(path)
-    absolute_path = check_path_exist(path)
-    raise ActionController::ForbiddenError unless File.directory?(absolute_path)
-    input_file = params[:file]
-    if input_file
-      File.open(Rails.root.join(absolute_path, input_file.original_filename), 'wb') do |file|
-        file.write(input_file.read)
-      end
-    end
-  end
-
-  def check_path_exist(path)
-    @absolute_path = safe_expand_path(path)
-    @relative_path = path
-    raise ActionController::RoutingError, 'Not Found' unless File.exists?(@absolute_path)
-    @absolute_path
-  end
-
+  # Set the base URL for display
   def set_base_url
-    @base_url = ENV['BASE_URL'] || 'root'
+    @base_url = ENV.fetch('BASE_URL', 'root')
+  end
+
+  # Validate that the base directory exists and is accessible
+  def validate_base_directory
+    return if BASE_DIRECTORY.directory? && BASE_DIRECTORY.readable? && BASE_DIRECTORY.executable?
+
+    raise RuntimeError, "Base directory '#{BASE_DIRECTORY}' is not accessible"
   end
 end

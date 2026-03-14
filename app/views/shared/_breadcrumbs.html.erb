@@ -1,0 +1,16 @@
+<h1 class="breadcrumb">
+  <% @directory_info.breadcrumbs.each_with_index do |breadcrumb, index| %>
+    <% if index > 0 %>
+      <span class="separator">/</span>
+    <% end %>
+
+    <% if breadcrumb == @directory_info.breadcrumbs.last %>
+      <%= breadcrumb.name %>
+    <% else %>
+      <% classes = index.zero? && @directory_info.root? ? 'base_url' : '' %>
+      <%= link_to breadcrumb.url, class: classes do %>
+        <%= breadcrumb.name %>
+      <% end %>
+    <% end %>
+  <% end %>
+</h1>
